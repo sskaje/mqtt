@@ -278,6 +278,245 @@ class spMQTT extends spMQTTBase{
     }
 
     /**
+     * SUBSCRIBE
+     *
+     * @param array $topics array(array(string topic, int qos, callback callback))
+     * @param int $default_qos
+     * @param null $default_callback
+     */
+    public function subscribe(array $topics) {
+        # set msg id
+        $msgid = mt_rand(1, 65535);
+        # send SUBSCRIBE
+        $subscribeobj = $this->getMessageObject(spMQTTMessageType::SUBSCRIBE);
+        $subscribeobj->setMsgID($msgid);
+
+        if (count($topics) > 100) {
+            throw new SPMQTT_Exception('Don\'t try to subscribe more than 100 topics', 100401);
+        }
+
+        $all_topic_qos = array();
+        foreach ($topics as $topic_name=>$topic_qos) {
+            spMQTTUtil::CheckQos($topic_qos);
+
+            $this->topics[$topic_name] = $topic_qos;
+
+            $subscribeobj->addTopic(
+                $topic_name,
+                $topic_qos
+            );
+            $all_topic_qos[] = $topic_qos;
+        }
+
+        $subscribe_bytes_written = $subscribeobj->write();
+        # read SUBACK
+        $subackobj = null;
+        $suback_result = $subscribeobj->read(spMQTTMessageType::SUBACK, $subackobj);
+
+        # check msg id & qos payload
+        if ($msgid != $suback_result['msgid']) {
+            throw new SPMQTT_Exception('SUBSCRIBE/SUBACK message identifier mismatch: ' . $msgid . ':' . $suback_result['msgid'], 100402);
+        }
+        if ($all_topic_qos != $suback_result['qos']) {
+            throw new SPMQTT_Exception('SUBACK returned qos list doesn\'t match SUBSCRIBE', 100403);
+        }
+
+        return true;
+    }
+
+    /**
+     * Topics
+     *
+     * @var array
+     */
+    protected $topics = array();
+
+    /**
+     * loop
+     * @param callback $callback
+     * @throws SPMQTT_Exception
+     */
+    public function loop($callback) {
+        spMQTTDebug::Log('loop()');
+
+        if (empty($this->topics)) {
+            throw new SPMQTT_Exception('no topic subscribed', 100601);
+        }
+
+        while (1) {
+            $sockets = array($this->socket);
+            $w = $e = NULL;
+
+            if (stream_select($sockets, $w, $e, $this->keepalive / 2)) {
+                if (feof($this->socket) || !$this->checkAndPing()) {
+                    spMQTTDebug::Log('loop(): EOF detected');
+                    $this->reconnect();
+                    $this->subscribe($this->topics);
+                }
+
+                # The maximum value of remaining length is 268 435 455, FF FF FF 7F.
+                # In most cases, 4 bytes is enough for fixed header and remaining length.
+                # For PUBREL, 4 bytes is the maximum length.
+                # So, read the first 4 bytes and try to figure out the remaining length,
+                # then read else.
+
+                # read 4 bytes
+                $read_bytes = 4;
+                $read_message = $this->socket_read($read_bytes);
+                if (empty($read_message)) {
+                    continue;
+                }
+
+                $cmd = spMQTTUtil::UnpackCommand(ord($read_message[0]));
+
+                $message_type = $cmd['message_type'];
+                $dup = $cmd['dup'];
+                $qos = $cmd['qos'];
+                $retain = $cmd['retain'];
+
+                spMQTTDebug::Log("loop(): message_type={$message_type}, dup={$dup}, QoS={$qos}, RETAIN={$retain}");
+
+                $flag_remaining_length_finished = 0;
+                for ($i=1; isset($read_message[$i]); $i++) {
+                    if (ord($read_message[$i]) < 0x80) {
+                        $flag_remaining_length_finished = 1;
+                        break;
+                    }
+                }
+                if (empty($flag_remaining_length_finished)) {
+                    # read 3 more bytes
+                    $read_message .= $this->socket_read(3);
+                }
+
+                $pos = 1;
+                $remaining_length = spMQTTUtil::RemainingLengthDecode($read_message, $pos);
+                $to_read = $remaining_length - $pos;
+                spMQTTDebug::Log('loop(): remaining length=' . $remaining_length . ' to read='.$to_read);
+
+                $read_message .= $this->socket_read($to_read);
+
+                spMQTTDebug::Log('loop(): read message=' . spMQTTUtil::PrintHex($read_message, true));
+
+                switch ($message_type) {
+                case spMQTTMessageType::PUBLISH:
+                    spMQTTDebug::Log('loop(): PUBLISH');
+                    # topic length
+                    $topic_length = spMQTTUtil::ToUnsignedShort(substr($read_message, $pos, 2));
+                    $pos += 2;
+                    # topic content
+                    $topic = substr($read_message, $pos, $topic_length);
+                    $pos += $topic_length;
+
+                    # PUBLISH QoS 0 doesn't have msgid
+                    if ($qos > 0) {
+                        $msgid = spMQTTUtil::ToUnsignedShort(substr($read_message, $pos, 2));
+                        $pos += 2;
+                    }
+
+                    # message content
+                    $message = substr($read_message, $pos);
+
+                    if ($qos == 0) {
+                        spMQTTDebug::Log('loop(): PUBLISH QoS=0 PASS');
+                        # Do nothing
+                    } else if ($qos == 1) {
+                        # PUBACK
+                        $pubackobj = $this->getMessageObject(spMQTTMessageType::PUBACK);
+                        $pubackobj->setDup($dup);
+                        $pubackobj->setMsgID($msgid);
+                        $puback_bytes_written = $pubackobj->write();
+                        spMQTTDebug::Log('loop(): PUBLISH QoS=1 PUBACK written=' . $puback_bytes_written);
+
+                    } else if ($qos == 2) {
+                        # PUBREC
+                        $pubrecobj = $this->getMessageObject(spMQTTMessageType::PUBREC);
+                        $pubrecobj->setDup($dup);
+                        $pubrecobj->setMsgID($msgid);
+                        $pubrec_bytes_written = $pubrecobj->write();
+                        spMQTTDebug::Log('loop(): PUBLISH QoS=2 PUBREC written=' . $pubrec_bytes_written);
+
+                    } else {
+                        # wrong packet
+                        spMQTTDebug::Log('loop(): PUBLISH Invalid QoS');
+                    }
+                    # callback
+                    call_user_func($callback, $topic, $message);
+                    break;
+
+                case spMQTTMessageType::PUBREL:
+                    $msgid = spMQTTUtil::ToUnsignedShort(substr($read_message, $pos, 2));
+                    $pos += 2;
+
+                    # PUBCOMP
+                    $pubcompobj = $this->getMessageObject(spMQTTMessageType::PUBCOMP);
+                    $pubcompobj->setDup($dup);
+                    $pubcompobj->setMsgID($msgid);
+                    $pubcomp_bytes_written = $pubcompobj->write();
+                    spMQTTDebug::Log('loop(): PUBREL QoS=2 PUBCOMP written=' . $pubcomp_bytes_written);
+                    break;
+                }
+            }
+        }
+    }
+
+    protected function checkAndPing() {
+        spMQTTDebug::Log('checkAndPing()');
+        static $time = null;
+        $current_time = time();
+        if (empty($time)) {
+            $time = $current_time;
+        }
+
+        if ($current_time - $time >= $this->keepalive / 2) {
+            spMQTTDebug::Log("checkAndPing(): current_time={$current_time}, time={$time}, keepalive={$this->keepalive}");
+            $time = $current_time;
+            $ping_result = $this->ping();
+            return $ping_result;
+        }
+        return true;
+    }
+
+    /**
+     * Unsubscribe topics
+     *
+     * @param array $topics
+     * @return bool
+     * @throws SPMQTT_Exception
+     */
+    public function unsubscribe(array $topics) {
+        # set msg id
+        $msgid = mt_rand(1, 65535);
+        # send SUBSCRIBE
+        $unsubscribeobj = $this->getMessageObject(spMQTTMessageType::UNSUBSCRIBE);
+        $unsubscribeobj->setMsgID($msgid);
+
+        if (count($topics) > 100) {
+            throw new SPMQTT_Exception('Don\'t try to subscribe more than 100 topics', 100501);
+        }
+
+        foreach ($topics as $topic_name) {
+            if (!isset($this->topics[$topic_name])) {
+                # log
+                continue;
+            }
+
+            $unsubscribeobj->addTopic($topic_name);
+        }
+
+        $subscribe_bytes_written = $unsubscribeobj->write();
+        # read UNSUBACK
+        $unsubackobj = null;
+        $unsuback_msgid = $unsubscribeobj->read(spMQTTMessageType::UNSUBACK, $subackobj);
+
+        # check msg id & qos payload
+        if ($msgid != $unsuback_msgid) {
+            throw new SPMQTT_Exception('UNSUBSCRIBE/UNSUBACK message identifier mismatch: ' . $msgid . ':' . $unsuback_msgid, 100502);
+        }
+
+        return true;
+    }
+
+    /**
      * Disconnect connection
      *
      * @return bool
@@ -294,8 +533,8 @@ class spMQTT extends spMQTTBase{
      * @return bool
      */
     public function ping() {
-        $pingreqobj = $this->getMessageObject(spMQTTMessageType::PINGREQ);
         spMQTTDebug::Log('ping()');
+        $pingreqobj = $this->getMessageObject(spMQTTMessageType::PINGREQ);
         $pingreqobj->write();
         $pingrespobj = null;
         $pingresp = $pingreqobj->read(spMQTTMessageType::PINGRESP, $pingrespobj);
@@ -355,13 +594,10 @@ class spMQTTUtil extends spMQTTBase {
      * return string with a 16-bit big endian length ahead.
      *
      * @param string $str  input string
-     * @param int & $i     length of returned value + $i's original value
      * @return string      returned string
      */
-    static public function PackStringWithLength($str, &$i){
+    static public function PackStringWithLength($str){
         $len = strlen($str);
-        $i += $len + 2;
-
         return pack('n', $len) . $str;
     }
     /**
@@ -386,11 +622,11 @@ class spMQTTUtil extends spMQTTBase {
     /**
      * Decode Remaining Length
      *
-     * @param string & $msg
+     * @param string $msg
      * @param int & $i
      * @return int
      */
-    static public function RemainingLengthDecode(&$msg, &$i){
+    static public function RemainingLengthDecode($msg, &$i){
         $multiplier = 1;
         $value = 0 ;
         do{
@@ -411,7 +647,7 @@ class spMQTTUtil extends spMQTTBase {
      */
     static public function CheckQos($qos)
     {
-        if ($qos > 2 || $qos < 1) {
+        if ($qos > 2 || $qos < 0) {
             throw new SPMQTT_Exception('QoS must be an integer in (0,1,2).', 300001);
         }
     }
@@ -426,6 +662,36 @@ class spMQTTUtil extends spMQTTBase {
         if (strlen($clientid) > 23) {
             throw new SPMQTT_Exception('Client identifier exceeds 23 bytes.', 300101);
         }
+    }
+
+    /**
+     * Convert WORD to unsigned short
+     *
+     * @param string $word
+     * @return int
+     */
+    static public function ToUnsignedShort($word) {
+        return (ord($word[0]) << 8) | (ord($word[1]));
+    }
+
+    /**
+     * Unpack command
+     * @param int $cmd
+     * @return array
+     */
+    static public function UnpackCommand($cmd) {
+        # check message type
+        $message_type = $cmd >> 4;
+        $dup = ($cmd & 0x08) >> 3;
+        $qos = ($cmd & 0x06) >> 1;
+        $retain = ($cmd & 0x01);
+
+        return array(
+            'message_type'  =>  $message_type,
+            'dup'           =>  $dup,
+            'qos'           =>  $qos,
+            'retain'        =>  $retain,
+        );
     }
 }
 
@@ -458,7 +724,6 @@ class spMQTTDebug extends spMQTTBase {
         }
     }
 }
-
 
 /**
  * Message type definitions
@@ -529,10 +794,29 @@ class spMQTTMessageType extends spMQTTBase {
         spMQTTMessageType::PUBREC       => 'spMQTTMessage_PUBREC',
         spMQTTMessageType::PUBREL       => 'spMQTTMessage_PUBREL',
         spMQTTMessageType::PUBCOMP      => 'spMQTTMessage_PUBCOMP',
-
+        spMQTTMessageType::SUBSCRIBE    => 'spMQTTMessage_SUBSCRIBE',
+        spMQTTMessageType::SUBACK       => 'spMQTTMessage_SUBACK',
+        spMQTTMessageType::UNSUBSCRIBE  => 'spMQTTMessage_UNSUBSCRIBE',
+        spMQTTMessageType::UNSUBACK     => 'spMQTTMessage_UNSUBACK',
         spMQTTMessageType::PINGREQ      => 'spMQTTMessage_PINGREQ',
         spMQTTMessageType::PINGRESP     => 'spMQTTMessage_PINGRESP',
         spMQTTMessageType::DISCONNECT   => 'spMQTTMessage_DISCONNECT',
+    );
+    static public $name = array(
+        spMQTTMessageType::CONNECT      => 'CONNECT',
+        spMQTTMessageType::CONNACK      => 'CONNACK',
+        spMQTTMessageType::PUBLISH      => 'PUBLISH',
+        spMQTTMessageType::PUBACK       => 'PUBACK',
+        spMQTTMessageType::PUBREC       => 'PUBREC',
+        spMQTTMessageType::PUBREL       => 'PUBREL',
+        spMQTTMessageType::PUBCOMP      => 'PUBCOMP',
+        spMQTTMessageType::SUBSCRIBE    => 'SUBSCRIBE',
+        spMQTTMessageType::SUBACK       => 'SUBACK',
+        spMQTTMessageType::UNSUBSCRIBE  => 'UNSUBSCRIBE',
+        spMQTTMessageType::UNSUBACK     => 'UNSUBACK',
+        spMQTTMessageType::PINGREQ      => 'PINGREQ',
+        spMQTTMessageType::PINGRESP     => 'PINGRESP',
+        spMQTTMessageType::DISCONNECT   => 'DISCONNECT',
     );
 }
 
@@ -544,16 +828,14 @@ abstract class spMQTTMessage extends spMQTTBase {
      * @var spMQTT
      */
     protected $mqtt;
-    
-    const SEND_FIXED_ONLY     = 0x01;
-    const SEND_WITH_VARIABLE  = 0x02;
-    const SEND_WITH_PAYLOAD   = 0x03;
 
-    const RECV_FIXED_ONLY     = 0x11;
-    const RECV_WITH_VARIABLE  = 0x12;
-    const RECV_WITH_PAYLOAD   = 0x13;
+    const FIXED_ONLY     = 0x01;
+    const WITH_VARIABLE  = 0x02;
+    const WITH_PAYLOAD   = 0x03;
+    const MSGID_ONLY     = 0x04;
 
-    protected $protocol_type = self::SEND_FIXED_ONLY;
+    protected $protocol_type = self::FIXED_ONLY;
+
     protected $read_bytes = 0;
     /**
      * @var spMQTTMessageHeader
@@ -577,38 +859,25 @@ abstract class spMQTTMessage extends spMQTTBase {
      * @throws SPMQTT_Exception
      */
     final public function build(&$length) {
-        if ($this->protocol_type == self::SEND_FIXED_ONLY) {
-            return $this->buildFixedHeaderOnlyMessage($length);
-        } else if ($this->protocol_type == self::SEND_WITH_VARIABLE) {
-            if (!method_exists($this, 'buildMessageWithVariableHeader')) {
-                throw new SPMQTT_Exception('"buildMessageWithVariableHeader(&$length)" not defined in '. __CLASS__, 200001);
-            }
-            return $this->buildMessageWithVariableHeader($length);
-        } else if ($this->protocol_type == self::SEND_WITH_PAYLOAD) {
-            if (!method_exists($this, 'buildMessageWithPayload')) {
-                throw new SPMQTT_Exception('"buildMessageWithPayload(&$length)" not defined in '. __CLASS__, 200002);
-            }
-            return $this->buildMessageWithPayload($length);
+        if ($this->protocol_type == self::FIXED_ONLY) {
+            $message = $this->processBuild();
+        } else if ($this->protocol_type == self::WITH_VARIABLE) {
+            $message = $this->processBuild();
+        } else if ($this->protocol_type == self::WITH_PAYLOAD) {
+            $message = $this->processBuild();
         } else {
             throw new SPMQTT_Exception('Invalid protocol type', 200003);
         }
+
+        $length = strlen($message);
+        $this->header->setRemainingLength($length);
+        $length += $this->header->getLength();
+        return $this->header->build() . $message;
     }
-    /**
-     * Build a fixed-header-only message
-     *
-     * @param int & $length
-     * @return string
-     */
-    protected function buildFixedHeaderOnlyMessage(&$length) {
-        # Fixed header only
-        $length = $this->header->getLength();
-        return $this->header->build();
-    }
-    /*
-        protected function buildMessageWithVariableHeader(&$length) {}
-        protected function buildMessageWithPayload(&$length) {}
-        protected function process_read($message) {}
-    */
+
+    protected function processBuild() {return '';}
+    protected function processRead($message) {return false;}
+
     /**
      * Read packet to generate an new message object
      *
@@ -616,10 +885,15 @@ abstract class spMQTTMessage extends spMQTTBase {
      * @param spMQTTMessage & $class
      * @return mixed
      */
-    public function read($message_type, & $class=null) {
-        spMQTTDebug::Log('Message Read: message_type='.$message_type);
-        # create message type
-        $class = $this->mqtt->getMessageObject($message_type);
+    final public function read($message_type=null, & $class=null) {
+        if (!empty($message_type)) {
+            spMQTTDebug::Log('Message Read: message_type='.$message_type);
+            # create message type
+            $class = $this->mqtt->getMessageObject($message_type);
+        } else {
+            spMQTTDebug::Log('Message Read: message_type='.$this->message_type);
+            $class = $this;
+        }
 
         spMQTTDebug::Log('Message Read: bytes to read='.$class->read_bytes);
         if ($class->read_bytes) {
@@ -630,16 +904,46 @@ abstract class spMQTTMessage extends spMQTTBase {
         spMQTTDebug::Log('Message read: message=' . spMQTTUtil::PrintHex($message, true));
         spMQTTDebug::Log('Message Read: bytes to read='.$class->read_bytes);
 
-        if (!method_exists($class, 'process_read')) {
-            throw new SPMQTT_Exception('"process_read($message)" not defined in '. get_class($class), 200201);
+        if (!method_exists($class, 'processRead')) {
+            throw new SPMQTT_Exception('"processRead($message)" not defined in '. get_class($class), 200201);
         }
 
-        if ($class->protocol_type == self::RECV_FIXED_ONLY) {
-            return $class->process_read($message);
-        } else if ($class->protocol_type == self::RECV_WITH_VARIABLE) {
-            return $class->process_read($message);
-        } else if ($class->protocol_type == self::RECV_WITH_PAYLOAD) {
-            return $class->process_read($message);
+        if ($class->protocol_type == self::FIXED_ONLY) {
+            return $class->processRead($message);
+        } else if ($class->protocol_type == self::WITH_VARIABLE) {
+            return $class->processRead($message);
+        } else if ($class->protocol_type == self::WITH_PAYLOAD) {
+            return $class->processRead($message);
+        } else {
+            throw new SPMQTT_Exception('Invalid protocol type', 200202);
+        }
+    }
+    /**
+     * Process packet with Fixed Header + Message Identifier only
+     *
+     * @param string $message
+     * @return array|bool
+     */
+    final protected function processReadFixedHeaderWithMsgID($message) {
+        $packet_length = 4;
+        $name = spMQTTMessageType::$name[$this->message_type];
+
+        if (!isset($message[$packet_length - 1])) {
+            # error
+            spMQTTDebug::Log("Message {$name}: error on reading");
+            return false;
+        }
+
+        $packet = unpack('Ccmd/Clength/nmsgid', $message);
+
+        $packet['cmd'] = spMQTTUtil::UnpackCommand($packet['cmd']);
+
+        if ($packet['cmd']['message_type'] != $this->message_type) {
+            spMQTTDebug::Log("Message {$name}: type mismatch");
+            return false;
+        } else {
+            spMQTTDebug::Log("Message {$name}: success");
+            return $packet;
         }
     }
 
@@ -766,7 +1070,7 @@ class spMQTTWill {
  */
 class spMQTTMessage_CONNECT extends spMQTTMessage {
     protected $message_type = spMQTTMessageType::CONNECT;
-    protected $protocol_type = self::SEND_WITH_PAYLOAD;
+    protected $protocol_type = self::WITH_PAYLOAD;
     /**
      * @var spMQTTWill
      */
@@ -794,20 +1098,18 @@ class spMQTTMessage_CONNECT extends spMQTTMessage {
         $this->clientid = $clientid;
     }
 
-    protected function buildMessageWithPayload(&$length) {;
-        # 3.1. CONNECT - Client requests a connection to a server
-        $i = 0;
+    protected function processBuild() {;
         $buffer = "";
 
-        $buffer .= chr(0x00); $i++; # 0x00
-        $buffer .= chr(0x06); $i++; # 0x06
-        $buffer .= chr(0x4d); $i++; # 'M'
-        $buffer .= chr(0x51); $i++; # 'Q'
-        $buffer .= chr(0x49); $i++; # 'I'
-        $buffer .= chr(0x73); $i++; # 's'
-        $buffer .= chr(0x64); $i++; # 'd'
-        $buffer .= chr(0x70); $i++; # 'p'
-        $buffer .= chr(0x03); $i++; # protocol version
+        $buffer .= chr(0x00); # 0x00
+        $buffer .= chr(0x06); # 0x06
+        $buffer .= chr(0x4d); # 'M'
+        $buffer .= chr(0x51); # 'Q'
+        $buffer .= chr(0x49); # 'I'
+        $buffer .= chr(0x73); # 's'
+        $buffer .= chr(0x64); # 'd'
+        $buffer .= chr(0x70); # 'p'
+        $buffer .= chr(0x03); # protocol version
 
         # Connect Flags
         # Set to 0 by default
@@ -830,33 +1132,29 @@ class spMQTTMessage_CONNECT extends spMQTTMessage {
             $var |= 0x40;
         }
 
-        $buffer .= chr($var);$i++;
+        $buffer .= chr($var);
         # End of Connect Flags
 
         # Keep alive: unsigned short 16bits big endian
         $buffer .= pack('n', $this->keepalive);
-        $i += 2;
 
         # Append client id
-        $buffer .= spMQTTUtil::PackStringWithLength($this->clientid, $i);
+        $buffer .= spMQTTUtil::PackStringWithLength($this->clientid);
 
         # Adding will to payload
         if($this->will != NULL){
-            $buffer .= spMQTTUtil::PackStringWithLength($this->will->getTopic(),   $i);
-            $buffer .= spMQTTUtil::PackStringWithLength($this->will->getMessage(), $i);
+            $buffer .= spMQTTUtil::PackStringWithLength($this->will->getTopic());
+            $buffer .= spMQTTUtil::PackStringWithLength($this->will->getMessage());
         }
         # Append User name
         if($this->username) {
-            $buffer .= spMQTTUtil::PackStringWithLength($this->username, $i);
+            $buffer .= spMQTTUtil::PackStringWithLength($this->username);
         }
         # Append Password
         if($this->password) {
-            $buffer .= spMQTTUtil::PackStringWithLength($this->password, $i);
+            $buffer .= spMQTTUtil::PackStringWithLength($this->password);
         }
-
-        $length = $i + $this->header->getLength();
-        $this->header->setRemainingLength($i);
-        return $this->header->build() . $buffer;
+        return $buffer;
     }
 }
 
@@ -865,10 +1163,10 @@ class spMQTTMessage_CONNECT extends spMQTTMessage {
  */
 class spMQTTMessage_CONNACK extends spMQTTMessage {
     protected $message_type = spMQTTMessageType::CONNACK;
-    protected $protocol_type = self::RECV_WITH_VARIABLE;
+    protected $protocol_type = self::WITH_VARIABLE;
     protected $read_bytes = 4;
 
-    protected function process_read($message) {
+    protected function processRead($message) {
         if (ord($message[0])>>4 == $this->message_type && $message[3] == chr(0)){
             spMQTTDebug::Log("Connected to Broker");
             return true;
@@ -901,7 +1199,7 @@ class spMQTTMessage_CONNACK extends spMQTTMessage {
  */
 class spMQTTMessage_PUBLISH extends spMQTTMessage {
     protected $message_type = spMQTTMessageType::PUBLISH;
-    protected $protocol_type = self::SEND_WITH_PAYLOAD;
+    protected $protocol_type = self::WITH_PAYLOAD;
 
     protected $topic;
     protected $message;
@@ -925,11 +1223,10 @@ class spMQTTMessage_PUBLISH extends spMQTTMessage {
         return $this->header->setRetain($retain);
     }
 
-    protected function buildMessageWithPayload(&$length) {;
-        $i = 0;
+    protected function processBuild() {;
         $buffer = "";
         # Topic
-        $buffer .= spMQTTUtil::PackStringWithLength($this->topic,$i);
+        $buffer .= spMQTTUtil::PackStringWithLength($this->topic);
         spMQTTDebug::Log('Message PUBLISH: topic='.$this->topic);
 
         spMQTTDebug::Log('Message PUBLISH: QoS='.$this->header->getQos());
@@ -941,18 +1238,14 @@ class spMQTTMessage_PUBLISH extends spMQTTMessage {
                 $id = ++$this->msgid;
             }
             $buffer .= pack('n', $id);
-            $i += 2;
             spMQTTDebug::Log('Message PUBLISH: msgid='.$id);
         }
 
         # Payload
         $buffer .= $this->message;
-        $i += strlen($this->message);
         spMQTTDebug::Log('Message PUBLISH: message='.$this->message);
 
-        $length = $i + $this->header->getLength();
-        $this->header->setRemainingLength($i);
-        return $this->header->build() . $buffer;
+        return  $buffer;
     }
 }
 
@@ -962,31 +1255,31 @@ class spMQTTMessage_PUBLISH extends spMQTTMessage {
  */
 class spMQTTMessage_PUBACK extends spMQTTMessage {
     protected $message_type = spMQTTMessageType::PUBACK;
-    protected $protocol_type = self::RECV_WITH_VARIABLE;
+    protected $protocol_type = self::WITH_VARIABLE;
     protected $read_bytes = 4;
 
-    protected function process_read($message) {
-        # for PUBACK
-        if (!isset($message[$this->read_bytes - 1])) {
-            # error
-            spMQTTDebug::Log('Message PUBACK: error on reading');
+    protected function processRead($message) {
+        $puback_packet = $this->processReadFixedHeaderWithMsgID($message);
+        if (!$puback_packet) {
             return false;
         }
+        return $puback_packet['msgid'];
+    }
 
-        # fixed message id
-        $puback = unpack('cheader/clen/nmsgid', $message);
+    protected $msgid;
+    public function setMsgID($msgid) {
+        $this->msgid = $msgid;
+    }
+    public function setDup($dup) {
+        return $this->header->setDup($dup);
+    }
 
-        # fixed header
-        if ($puback['header'] >>4 == spMQTTMessageType::PUBACK && $puback['len'] == 0x02){
-            spMQTTDebug::Log('Message PUBACK: continue');
-        } else {
-            spMQTTDebug::Log('Message PUBACK: protocol mismatch');
-            return false;
-        }
-
-        spMQTTDebug::Log('Message PUBACK: msgid=' . $puback['msgid']);
-
-        return $puback['msgid'];
+    protected function processBuild() {;
+        $buffer = "";
+        $buffer .= pack('n', $this->msgid);
+        spMQTTDebug::Log('Message PUBACK: msgid='.$this->msgid);
+        $this->header->setQos(1);
+        return $buffer;
     }
 }
 
@@ -995,31 +1288,31 @@ class spMQTTMessage_PUBACK extends spMQTTMessage {
  */
 class spMQTTMessage_PUBREC extends spMQTTMessage {
     protected $message_type = spMQTTMessageType::PUBREC;
-    protected $protocol_type = self::RECV_WITH_VARIABLE;
+    protected $protocol_type = self::WITH_VARIABLE;
     protected $read_bytes = 4;
 
-    protected function process_read($message) {
-        # for PUBREC
-        if (!isset($message[$this->read_bytes - 1])) {
-            # error
-            spMQTTDebug::Log('Message PUBREC: error on reading');
+    protected function processRead($message) {
+        $pubrec_packet = $this->processReadFixedHeaderWithMsgID($message);
+        if (!$pubrec_packet) {
             return false;
         }
+        return $pubrec_packet['msgid'];
+    }
 
-        # fixed message id
-        $puback = unpack('cheader/clen/nmsgid', $message);
+    protected $msgid;
+    public function setMsgID($msgid) {
+        $this->msgid = $msgid;
+    }
+    public function setDup($dup) {
+        return $this->header->setDup($dup);
+    }
 
-        # fixed header
-        if ($puback['header'] >>4 == spMQTTMessageType::PUBREC && $puback['len'] == 0x02){
-            spMQTTDebug::Log('Message PUBREC: continue');
-        } else {
-            spMQTTDebug::Log('Message PUBREC: protocol mismatch');
-            return false;
-        }
-
-        spMQTTDebug::Log('Message PUBREC: msgid=' . $puback['msgid']);
-
-        return $puback['msgid'];
+    protected function processBuild() {;
+        $buffer = "";
+        $buffer .= pack('n', $this->msgid);
+        spMQTTDebug::Log('Message PUBREC: msgid='.$this->msgid);
+        $this->header->setQos(1);
+        return $buffer;
     }
 }
 
@@ -1028,24 +1321,30 @@ class spMQTTMessage_PUBREC extends spMQTTMessage {
  */
 class spMQTTMessage_PUBREL extends spMQTTMessage {
     protected $message_type = spMQTTMessageType::PUBREL;
-    protected $protocol_type = self::SEND_WITH_VARIABLE;
+    protected $protocol_type = self::WITH_VARIABLE;
+
+    protected function processRead($message) {
+        $pubrel_packet = $this->processReadFixedHeaderWithMsgID($message);
+        if (!$pubrel_packet) {
+            return false;
+        }
+        return $pubrel_packet['msgid'];
+    }
 
     protected $msgid = 0;
     public function setMsgID($msgid) {
         $this->msgid = $msgid;
     }
+    public function setDup($dup) {
+        return $this->header->setDup($dup);
+    }
 
-    protected function buildMessageWithVariableHeader(&$length) {;
-        $i = 0;
+    protected function processBuild() {;
         $buffer = "";
-
         $buffer .= pack('n', $this->msgid);
-        $i += 2;
         spMQTTDebug::Log('Message PUBREL: msgid='.$this->msgid);
-
-        $length = $i + $this->header->getLength();
-        $this->header->setRemainingLength($i);
-        return $this->header->build() . $buffer;
+        $this->header->setQos(1);
+        return $buffer;
     }
 }
 
@@ -1054,83 +1353,196 @@ class spMQTTMessage_PUBREL extends spMQTTMessage {
  */
 class spMQTTMessage_PUBCOMP extends spMQTTMessage {
     protected $message_type = spMQTTMessageType::PUBCOMP;
-    protected $protocol_type = self::RECV_WITH_VARIABLE;
+    protected $protocol_type = self::WITH_VARIABLE;
     protected $read_bytes = 4;
 
-    protected function process_read($message) {
-        # for PUBCOMP
-        if (!isset($message[$this->read_bytes - 1])) {
-            # error
-            spMQTTDebug::Log('Message PUBCOMP: error on reading');
+    protected function processRead($message) {
+        $pubcomp_packet = $this->processReadFixedHeaderWithMsgID($message);
+        if (!$pubcomp_packet) {
             return false;
         }
+        return $pubcomp_packet['msgid'];
+    }
 
-        # fixed message id
-        $puback = unpack('cheader/clen/nmsgid', $message);
+    protected $msgid = 0;
+    public function setMsgID($msgid) {
+        $this->msgid = $msgid;
+    }
+    public function setDup($dup) {
+        return $this->header->setDup($dup);
+    }
+    protected function processBuild() {;
+        $buffer = "";
 
-        # fixed header
-        if ($puback['header'] >>4 == spMQTTMessageType::PUBCOMP && $puback['len'] == 0x02){
-            spMQTTDebug::Log('Message PUBCOMP: continue');
-        } else {
-            spMQTTDebug::Log('Message PUBCOMP: protocol mismatch');
-            return false;
-        }
+        $buffer .= pack('n', $this->msgid);
+        spMQTTDebug::Log('Message PUBCOMP: msgid='.$this->msgid);
 
-        spMQTTDebug::Log('Message PUBCOMP: msgid=' . $puback['msgid']);
-
-        return $puback['msgid'];
+        $this->header->setQos(1);
+        return $buffer;
     }
 }
 
-
-
 /**
- * Message DISCONNECT
+ * Message SUBSCRIBE
  */
-class spMQTTMessage_DISCONNECT extends spMQTTMessage {
-    protected $message_type = spMQTTMessageType::DISCONNECT;
-    protected $protocol_type = self::SEND_FIXED_ONLY;
+class spMQTTMessage_SUBSCRIBE extends spMQTTMessage {
+    protected $message_type = spMQTTMessageType::SUBSCRIBE;
+    protected $protocol_type = self::WITH_PAYLOAD;
+
+    protected $topics = array();
+    protected $msgid = 0;
+    public function addTopic($topic, $qos) {
+        $this->topics[$topic] = $qos;
+    }
+    public function setMsgID($msgid) {
+        $this->msgid = $msgid;
+    }
+
+    protected function processBuild() {;
+        $buffer = "";
+
+        # Variable Header: message identifier
+        $buffer .= pack('n', $this->msgid);
+        spMQTTDebug::Log('Message SUBSCRIBE: msgid='.$this->msgid);
+
+        # Payload
+        foreach ($this->topics as $topic=>$qos) {
+            $topic_length = strlen($topic);
+            $buffer .= pack('n', $topic_length);
+            $buffer .= $topic;
+            $buffer .= chr($qos);
+        }
+
+        # SUBSCRIBE uses QoS 1
+        $this->header->setQos(1);
+        #
+        $this->header->setDup(0);
+        return $buffer;
+    }
+}
+/**
+ * Message SUBACK
+ */
+class spMQTTMessage_SUBACK extends spMQTTMessage {
+    protected $message_type = spMQTTMessageType::SUBACK;
+    protected $protocol_type = self::WITH_VARIABLE;
+    protected $read_bytes = 4;
+
+    protected function processRead($message) {
+        $suback_packet = $this->processReadFixedHeaderWithMsgID($message);
+        if (!$suback_packet) {
+            return false;
+        }
+
+        $bytes = $this->mqtt->socket_read($suback_packet['length'] - 2);
+
+        $return_qos = array();
+        for ($i=0; isset($bytes[$i]); $i++) {
+            # pick bit 0,1
+            $return_qos[] = ord($bytes[$i]) & 0x03;
+        }
+
+        return array(
+            'msgid' =>  $suback_packet['msgid'],
+            'qos'   =>  $return_qos,
+        );
+    }
 }
 
+/**
+ * Message UNSUBSCRIBE
+ */
+class spMQTTMessage_UNSUBSCRIBE extends spMQTTMessage {
+    protected $message_type = spMQTTMessageType::UNSUBSCRIBE;
+    protected $protocol_type = self::WITH_PAYLOAD;
+
+    protected $topics = array();
+    protected $msgid = 0;
+    public function addTopic($topic) {
+        $this->topics[] = $topic;
+    }
+    public function setMsgID($msgid) {
+        $this->msgid = $msgid;
+    }
+
+    protected function processBuild() {;
+        $buffer = "";
+
+        # Variable Header: message identifier
+        $buffer .= pack('n', $this->msgid);
+        spMQTTDebug::Log('Message UNSUBSCRIBE: msgid='.$this->msgid);
+
+        # Payload
+        foreach ($this->topics as $topic) {
+            $topic_length = strlen($topic);
+            $buffer .= pack('n', $topic_length);
+            $buffer .= $topic;
+        }
+
+        # SUBSCRIBE uses QoS 1
+        $this->header->setQos(1);
+        $this->header->setDup(0);
+
+        return $buffer;
+    }
+}
+/**
+ * Message UNSUBACK
+ */
+class spMQTTMessage_UNSUBACK extends spMQTTMessage {
+    protected $message_type = spMQTTMessageType::UNSUBACK;
+    protected $protocol_type = self::FIXED_ONLY;
+    protected $read_bytes = 4;
+
+    protected function processRead($message) {
+        $unsuback_packet = $this->processReadFixedHeaderWithMsgID($message);
+        if (!$unsuback_packet) {
+            return false;
+        }
+        return $unsuback_packet['msgid'];
+    }
+}
 /**
  * Message PINGREQ
  */
 class spMQTTMessage_PINGREQ extends spMQTTMessage {
     protected $message_type = spMQTTMessageType::PINGREQ;
-    protected $protocol_type = self::SEND_FIXED_ONLY;
+    protected $protocol_type = self::FIXED_ONLY;
 }
-
 /**
  * Message PINGRESP
  */
 class spMQTTMessage_PINGRESP extends spMQTTMessage {
     protected $message_type = spMQTTMessageType::PINGRESP;
-    protected $protocol_type = self::RECV_FIXED_ONLY;
+    protected $protocol_type = self::FIXED_ONLY;
     protected $read_bytes = 2;
 
-    protected function process_read($message) {
+    protected function processRead($message) {
         # for PINGRESP
         if (!isset($message[$this->read_bytes - 1])) {
             # error
             spMQTTDebug::Log('Message PINGRESP: error on reading');
             return false;
         }
-        # check message type
-        $message_type = ord($message[0]) >> 4;
 
-        if ($message_type != $this->message_type) {
-            # wrong response protocol mismatch
-            spMQTTDebug::Log('Message PINGRESP: type mismatch');
-            # log
+        $packet = unpack('Ccmd/Clength', $message);
+
+        $packet['cmd'] = spMQTTUtil::UnpackCommand($packet['cmd']);
+
+        if ($packet['cmd']['message_type'] != $this->message_type) {
+            spMQTTDebug::Log("Message PINGRESP: type mismatch");
             return false;
         } else {
-            # write response
-            spMQTTDebug::Log('Message PINGRESP: success');
-            # log
+            spMQTTDebug::Log("Message PINGRESP: success");
             return true;
         }
     }
 }
-
-
+/**
+ * Message DISCONNECT
+ */
+class spMQTTMessage_DISCONNECT extends spMQTTMessage {
+    protected $message_type = spMQTTMessageType::DISCONNECT;
+    protected $protocol_type = self::FIXED_ONLY;
+}
 # EOF

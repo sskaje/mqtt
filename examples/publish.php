@@ -1,7 +1,7 @@
 <?php
 require(__DIR__ . '/../spMQTT.class.php');
 
-$mqtt = new spMQTT('tcp://test.mosquitto.org:1883/', '333');
+$mqtt = new spMQTT('tcp://test.mosquitto.org:1883/');
 
 //$mqtt->setAuth('sskaje', '123123');
 $connected = $mqtt->connect();
