@@ -4,13 +4,16 @@ simple MQTT client class
 
 Author: sskaje ([http://sskaje.me/](http://sskaje.me/))
 
-Only PUBLISH and it's related commands are currently supported, SSL/TLS not tested. 
+SSL/TLS not tested. 
+
+For SUBSCRIBE users, it's recommended to program a callback forwarding message to project's queue service.
 
 
 ##Files
 	/spMQTT.class.php					Class file
 	/examples							Example scripts
 		/publish.php					Publish test script
+		/subscribe.php					Subscribe test script
 	/README.md							this file
 
 ##Dependencies
