@@ -4,7 +4,7 @@ require(__DIR__ . '/../spMQTT.class.php');
 
 $mqtt = new spMQTT('tcp://test.mosquitto.org:1883/', '333');
 
-//spMQTTDebug::Enable();
+spMQTTDebug::Enable();
 
 //$mqtt->setAuth('sskaje', '123123');
 $mqtt->setKeepalive(3600);
@@ -16,6 +16,8 @@ $mqtt->ping();
 $topics['sskaje/#'] = 2;
 
 $mqtt->subscribe($topics);
+
+$mqtt->unsubscribe(array_keys($topics));
 
 $mqtt->loop('default_subscribe_callback');
 

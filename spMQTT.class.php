@@ -502,6 +502,7 @@ class spMQTT extends spMQTTBase{
             }
 
             $unsubscribeobj->addTopic($topic_name);
+            unset($this->topics[$topic_name]);
         }
 
         $unsubscribe_bytes_written = $unsubscribeobj->write();
