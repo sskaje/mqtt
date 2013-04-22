@@ -56,6 +56,8 @@ class spMQTT extends spMQTTBase{
     protected function socket_connect() {
         spMQTTDebug::Log('socket_connect()');
         $context = stream_context_create();
+        spMQTTDebug::Log('socket_connect(): connect to='.$this->address);
+
         $this->socket = stream_socket_client(
             $this->address,
             $errno,
@@ -179,7 +181,9 @@ class spMQTT extends spMQTTBase{
      */
     public function connect() {
         # create socket resource
-        $this->socket_connect();
+        if (!$this->socket_connect()) {
+            return false;
+        }
         spMQTTDebug::Log('connect()');
 
         $connectobj = $this->getMessageObject(spMQTTMessageType::CONNECT);
@@ -191,15 +195,22 @@ class spMQTT extends spMQTTBase{
             $clientid = $this->clientid;
         }
         $connectobj->setClientID($clientid);
+        spMQTTDebug::Log('connect(): clientid=' . $clientid);
         $connectobj->setKeepalive($this->keepalive);
+        spMQTTDebug::Log('connect(): keepalive=' . $this->keepalive);
         $connectobj->setAuth($this->username, $this->password);
+        spMQTTDebug::Log('connect(): username=' . $this->username . ' password=' . $this->password);
         $connectobj->setClean($this->connect_clean);
         if ($this->connect_will instanceof spMQTTWill) {
             $connectobj->setWill($this->connect_will);
         }
 
+        $length = 0;
+        $msg = $connectobj->build($length);
+
         $bytes_written = $connectobj->write();
         spMQTTDebug::Log('connect(): bytes written=' . $bytes_written);
+
 
         $connackobj = null;
         $connected = $connectobj->read(spMQTTMessageType::CONNACK, $connackobj);
@@ -390,8 +401,13 @@ class spMQTT extends spMQTTBase{
                 }
 
                 $pos = 1;
+                $len = $pos;
                 $remaining_length = spMQTTUtil::RemainingLengthDecode($read_message, $pos);
-                $to_read = $remaining_length - $pos;
+                if ($flag_remaining_length_finished) {
+                    $to_read = $remaining_length - (3 + $len - $pos);
+                } else {
+                    $to_read = $remaining_length - 2;
+                }
                 spMQTTDebug::Log('loop(): remaining length=' . $remaining_length . ' to read='.$to_read);
 
                 $read_message .= $this->socket_read($to_read);
@@ -875,6 +891,7 @@ abstract class spMQTTMessage extends spMQTTBase {
 
         $length = strlen($message);
         $this->header->setRemainingLength($length);
+        spMQTTDebug::Log('Message Build: remaining length='.$length);
         $length += $this->header->getLength();
         return $this->header->build() . $message;
     }
@@ -973,6 +990,7 @@ abstract class spMQTTMessage extends spMQTTBase {
 class spMQTTMessageHeader extends spMQTTBase {
     protected $message_type = 0;
     protected $remaining_length = 0;
+    protected $remaining_length_bytes = '';
     protected $dup = 0;
     protected $qos = 0;
     protected $retain = 0;
@@ -1001,7 +1019,9 @@ class spMQTTMessageHeader extends spMQTTBase {
     }
     public function setRemainingLength($remaining_length) {
         $this->remaining_length = $remaining_length;
+        $this->remaining_length_bytes = spMQTTUtil::RemainingLengthEncode($this->remaining_length);
     }
+
 
     /**
      * Build fixed header packet
@@ -1014,10 +1034,11 @@ class spMQTTMessageHeader extends spMQTTBase {
         $cmd |= ($this->qos << 1);
         $cmd |= $this->retain;
 
-        return chr($cmd) . spMQTTUtil::RemainingLengthEncode($this->remaining_length);
+        return chr($cmd) . $this->remaining_length_bytes;
     }
+
     public function getLength() {
-        return 2;
+        return 1 + strlen($this->remaining_length_bytes);
     }
 }
 

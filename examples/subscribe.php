@@ -2,7 +2,7 @@
 
 require(__DIR__ . '/../spMQTT.class.php');
 
-$mqtt = new spMQTT('tcp://test.mosquitto.org:1883/', '333');
+$mqtt = new spMQTT('tcp://test.mosquitto.org:1883/');
 
 spMQTTDebug::Enable();
 
@@ -13,11 +13,11 @@ $connected = $mqtt->connect();
 $mqtt->ping();
 
 
-$topics['sskaje/#'] = 2;
+$topics['sskaje/#'] = 1;
 
 $mqtt->subscribe($topics);
 
-$mqtt->unsubscribe(array_keys($topics));
+#$mqtt->unsubscribe(array_keys($topics));
 
 $mqtt->loop('default_subscribe_callback');
 
