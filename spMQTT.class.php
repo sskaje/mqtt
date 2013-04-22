@@ -309,6 +309,7 @@ class spMQTT extends spMQTTBase{
         }
 
         $subscribe_bytes_written = $subscribeobj->write();
+        spMQTTDebug::Log('subscribe(): bytes written=' . $subscribe_bytes_written);
         # read SUBACK
         $subackobj = null;
         $suback_result = $subscribeobj->read(spMQTTMessageType::SUBACK, $subackobj);
@@ -503,10 +504,12 @@ class spMQTT extends spMQTTBase{
             $unsubscribeobj->addTopic($topic_name);
         }
 
-        $subscribe_bytes_written = $unsubscribeobj->write();
+        $unsubscribe_bytes_written = $unsubscribeobj->write();
+
+        spMQTTDebug::Log('unsubscribe(): bytes written=' . $unsubscribe_bytes_written);
         # read UNSUBACK
         $unsubackobj = null;
-        $unsuback_msgid = $unsubscribeobj->read(spMQTTMessageType::UNSUBACK, $subackobj);
+        $unsuback_msgid = $unsubscribeobj->read(spMQTTMessageType::UNSUBACK, $unsubackobj);
 
         # check msg id & qos payload
         if ($msgid != $unsuback_msgid) {
@@ -704,7 +707,7 @@ class SPMQTT_Exception extends Exception {}
  * Debug class
  */
 class spMQTTDebug extends spMQTTBase {
-    static protected $enabled = true;
+    static protected $enabled = false;
     static public function Enable() {
         self::$enabled = true;
     }
