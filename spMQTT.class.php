@@ -64,10 +64,7 @@ class spMQTT extends spMQTTBase{
         $this->address = $address;
         # check client id
         spMQTTUtil::CheckClientID($clientid);
-        # Random client id
-        if (empty($clientid)) {
-            $clientid = 'mqtt'.substr(md5(uniqid('mqtt', true)), 8, 16);
-        }
+
         $this->clientid = $clientid;
     }
 
@@ -209,6 +206,10 @@ class spMQTT extends spMQTTBase{
         spMQTTDebug::Log('connect()');
 
         $connectobj = $this->getMessageObject(spMQTTMessageType::CONNECT);
+
+        if (!$this->connect_clean && empty($this->clientid)) {
+            throw new SPMQTT_Exception('Client id must be provided if Clean Session flag is set false.', 100701);
+        }
 
         # default client id
         if (empty($this->clientid)) {
