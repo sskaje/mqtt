@@ -82,7 +82,7 @@ class spMQTT extends spMQTTBase{
             $errno,
             $errstr,
             60,
-            STREAM_CLIENT_CONNECT | STREAM_CLIENT_PERSISTENT,
+            STREAM_CLIENT_CONNECT,
             $context
         );
         if (!$this->socket) {
@@ -104,6 +104,7 @@ class spMQTT extends spMQTTBase{
      * @return int
      */
     public function socket_write($packet, $packet_size) {
+        if (!$this->socket || !is_resource($this->socket)) return false;
         return fwrite($this->socket, $packet, $packet_size);
     }
 
@@ -114,6 +115,8 @@ class spMQTT extends spMQTTBase{
      * @return string
      */
     public function socket_read($length = 8192 ){
+        if (!$this->socket || !is_resource($this->socket)) return false;
+
         //	print_r(socket_get_status($this->socket));
         $string = "";
         $togo = $length;
@@ -1215,6 +1218,9 @@ class spMQTTMessage_CONNACK extends spMQTTMessage {
     protected $read_bytes = 4;
 
     protected function processRead($message) {
+        if (!isset($message[3])) {
+            return false;
+        }
         if (ord($message[0])>>4 == $this->message_type && $message[3] == chr(0)){
             spMQTTDebug::Log("Connected to Broker");
             return true;
