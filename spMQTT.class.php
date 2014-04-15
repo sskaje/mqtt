@@ -322,43 +322,9 @@ class spMQTT extends spMQTTBase{
      * @param null $default_callback
      */
     public function subscribe(array $topics) {
-        # set msg id
-        $msgid = mt_rand(1, 65535);
-        # send SUBSCRIBE
-        $subscribeobj = $this->getMessageObject(spMQTTMessageType::SUBSCRIBE);
-        $subscribeobj->setMsgID($msgid);
-
-        if (count($topics) > 100) {
-            throw new SPMQTT_Exception('Don\'t try to subscribe more than 100 topics', 100401);
-        }
-
-        $all_topic_qos = array();
         foreach ($topics as $topic_name=>$topic_qos) {
-            spMQTTUtil::CheckQos($topic_qos);
-
-            $this->topics[$topic_name] = $topic_qos;
-
-            $subscribeobj->addTopic(
-                $topic_name,
-                $topic_qos
-            );
-            $all_topic_qos[] = $topic_qos;
+            $this->topics_to_subscribe[$topic_name] = $topic_qos;
         }
-
-        $subscribe_bytes_written = $subscribeobj->write();
-        spMQTTDebug::Log('subscribe(): bytes written=' . $subscribe_bytes_written);
-        # read SUBACK
-        $subackobj = null;
-        $suback_result = $subscribeobj->read(spMQTTMessageType::SUBACK, $subackobj);
-
-        # check msg id & qos payload
-        if ($msgid != $suback_result['msgid']) {
-            throw new SPMQTT_Exception('SUBSCRIBE/SUBACK message identifier mismatch: ' . $msgid . ':' . $suback_result['msgid'], 100402);
-        }
-        if ($all_topic_qos != $suback_result['qos']) {
-            throw new SPMQTT_Exception('SUBACK returned qos list doesn\'t match SUBSCRIBE', 100403);
-        }
-
         return true;
     }
 
@@ -369,19 +335,86 @@ class spMQTT extends spMQTTBase{
      */
     protected $topics = array();
 
+    protected $topics_to_subscribe = array();
+    protected $topics_to_unsubscribe = array();
+
+    /**
+     * SUBSCRIBE
+     *
+     * @param int $default_qos
+     * @param null $default_callback
+     */
+    protected function do_subscribe() {
+        # set msg id
+        $msgid = mt_rand(1, 65535);
+        # send SUBSCRIBE
+        $subscribeobj = $this->getMessageObject(spMQTTMessageType::SUBSCRIBE);
+        $subscribeobj->setMsgID($msgid);
+
+        if (count($this->topics_to_subscribe) > 100) {
+            throw new SPMQTT_Exception('Don\'t try to subscribe more than 100 topics', 100401);
+        }
+
+        $all_topic_qos = array();
+        foreach ($this->topics_to_subscribe as $topic_name=>$topic_qos) {
+            spMQTTUtil::CheckQos($topic_qos);
+
+            $this->topics[$topic_name] = $topic_qos;
+
+            $subscribeobj->addTopic(
+                $topic_name,
+                $topic_qos
+            );
+            $all_topic_qos[] = $topic_qos;
+            unset($this->topics_to_subscribe[$topic_name]);
+        }
+
+        spMQTTDebug::Log('do_subscribe(): msgid=' . $msgid);
+        $subscribe_bytes_written = $subscribeobj->write();
+        spMQTTDebug::Log('do_subscribe(): bytes written=' . $subscribe_bytes_written);
+
+//        # TODO: SUBACK+PUBLISH
+//        # read SUBACK
+//        $subackobj = null;
+//        $suback_result = $subscribeobj->read(spMQTTMessageType::SUBACK, $subackobj);
+//
+//        # check msg id & qos payload
+//        if ($msgid != $suback_result['msgid']) {
+//            throw new SPMQTT_Exception('SUBSCRIBE/SUBACK message identifier mismatch: ' . $msgid . ':' . $suback_result['msgid'], 100402);
+//        }
+//        if ($all_topic_qos != $suback_result['qos']) {
+//            throw new SPMQTT_Exception('SUBACK returned qos list doesn\'t match SUBSCRIBE', 100403);
+//        }
+
+        return array($msgid, $all_topic_qos);
+    }
+
+
     /**
      * loop
-     * @param callback $callback
+     * @param callback $callback function(spMQTT $mqtt, $topic, $message)
      * @throws SPMQTT_Exception
      */
     public function loop($callback) {
         spMQTTDebug::Log('loop()');
 
-        if (empty($this->topics)) {
-            throw new SPMQTT_Exception('no topic subscribed', 100601);
+        if (empty($this->topics) && empty($this->topics_to_subscribe)) {
+            throw new SPMQTT_Exception('No topic subscribed/to be subscribed', 100601);
         }
 
+        $last_subscribe_msgid = 0;
+        $last_subscribe_qos = array();
+        $last_unsubscribe_msgid = 0;
         while (1) {
+            # Subscribe topics
+            if (!empty($this->topics_to_subscribe)) {
+                list($last_subscribe_msgid, $last_subscribe_qos) = $this->do_subscribe();
+            }
+            # Unsubscribe topics
+            if (!empty($this->topics_to_unsubscribe)) {
+                $last_unsubscribe_msgid = $this->do_unsubscribe();
+            }
+
             $sockets = array($this->socket);
             $w = $e = NULL;
 
@@ -394,7 +427,8 @@ class spMQTT extends spMQTTBase{
 
                 # The maximum value of remaining length is 268 435 455, FF FF FF 7F.
                 # In most cases, 4 bytes is enough for fixed header and remaining length.
-                # For PUBREL, 4 bytes is the maximum length.
+                # For PUBREL and UNSUBACK, 4 bytes is the maximum length.
+                # For SUBACK, QoS list should be checked.
                 # So, read the first 4 bytes and try to figure out the remaining length,
                 # then read else.
 
@@ -441,6 +475,7 @@ class spMQTT extends spMQTTBase{
                 spMQTTDebug::Log('loop(): read message=' . spMQTTUtil::PrintHex($read_message, true));
 
                 switch ($message_type) {
+                # Process PUBLISH
                 case spMQTTMessageType::PUBLISH:
                     spMQTTDebug::Log('loop(): PUBLISH');
                     # topic length
@@ -483,10 +518,12 @@ class spMQTT extends spMQTTBase{
                         spMQTTDebug::Log('loop(): PUBLISH Invalid QoS');
                     }
                     # callback
-                    call_user_func($callback, $topic, $message);
+                    call_user_func($callback, $this, $topic, $message);
                     break;
 
+                # Process PUBREL
                 case spMQTTMessageType::PUBREL:
+                    spMQTTDebug::Log('loop(): PUBREL');
                     $msgid = spMQTTUtil::ToUnsignedShort(substr($read_message, $pos, 2));
                     $pos += 2;
 
@@ -497,6 +534,46 @@ class spMQTT extends spMQTTBase{
                     $pubcomp_bytes_written = $pubcompobj->write();
                     spMQTTDebug::Log('loop(): PUBREL QoS=2 PUBCOMP written=' . $pubcomp_bytes_written);
                     break;
+
+                # Process SUBACK
+                case spMQTTMessageType::SUBACK:
+                    spMQTTDebug::Log('loop(): SUBACK');
+                    $msgid = spMQTTUtil::ToUnsignedShort(substr($read_message, $pos, 2));
+                    $pos += 2;
+
+                    $qos_list = array();
+                    for ($i=$pos; isset($read_message[$i]); $i++) {
+                        # pick bit 0,1
+                        $qos_list[] = ord($read_message[$i]) & 0x03;
+                    }
+
+                    # check msg id & qos payload
+                    if ($msgid != $last_subscribe_msgid) {
+                        spMQTTDebug::Log('loop(): SUBACK message identifier mismatch: ' . $msgid . ':' . $last_subscribe_msgid);
+                    } else {
+                        spMQTTDebug::Log('loop(): SUBACK msgid=' . $msgid);
+                    }
+                    if ($last_subscribe_qos != $qos_list) {
+                        spMQTTDebug::Log('loop(): SUBACK returned qos list doesn\'t match SUBSCRIBE');
+                    }
+
+                    break;
+
+                # Process UNSUBACK
+                case spMQTTMessageType::UNSUBACK:
+                    spMQTTDebug::Log('loop(): UNSUBACK');
+                    $msgid = spMQTTUtil::ToUnsignedShort(substr($read_message, $pos, 2));
+                    $pos += 2;
+
+                    # TODO:???
+                    if ($msgid != $last_unsubscribe_msgid) {
+                        spMQTTDebug::Log('loop(): UNSUBACK message identifier mismatch ' . $msgid . ':' . $last_unsubscribe_msgid);
+                    } else {
+                        spMQTTDebug::Log('loop(): UNSUBACK msgid=' . $msgid);
+                    }
+
+                    break;
+
                 }
             }
         }
@@ -527,17 +604,26 @@ class spMQTT extends spMQTTBase{
      * @throws SPMQTT_Exception
      */
     public function unsubscribe(array $topics) {
+        foreach ($topics as $topic) {
+            $this->topics_to_unsubscribe[] = $topic;
+        }
+        return true;
+    }
+    /**
+     * Unsubscribe topics
+     *
+     * @param array $topics
+     * @return bool
+     * @throws SPMQTT_Exception
+     */
+    protected function do_unsubscribe() {
         # set msg id
         $msgid = mt_rand(1, 65535);
         # send SUBSCRIBE
         $unsubscribeobj = $this->getMessageObject(spMQTTMessageType::UNSUBSCRIBE);
         $unsubscribeobj->setMsgID($msgid);
 
-        if (count($topics) > 100) {
-            throw new SPMQTT_Exception('Don\'t try to subscribe more than 100 topics', 100501);
-        }
-
-        foreach ($topics as $topic_name) {
+        foreach ($this->topics_to_unsubscribe as $tn=>$topic_name) {
             if (!isset($this->topics[$topic_name])) {
                 # log
                 continue;
@@ -545,11 +631,12 @@ class spMQTT extends spMQTTBase{
 
             $unsubscribeobj->addTopic($topic_name);
             unset($this->topics[$topic_name]);
+            unset($this->topics_to_unsubscribe[$tn]);
         }
 
         $unsubscribe_bytes_written = $unsubscribeobj->write();
-
         spMQTTDebug::Log('unsubscribe(): bytes written=' . $unsubscribe_bytes_written);
+
         # read UNSUBACK
         $unsubackobj = null;
         $unsuback_msgid = $unsubscribeobj->read(spMQTTMessageType::UNSUBACK, $unsubackobj);

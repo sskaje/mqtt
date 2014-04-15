@@ -9,6 +9,9 @@ spMQTTDebug::Enable();
 //$mqtt->setAuth('sskaje', '123123');
 $mqtt->setKeepalive(3600);
 $connected = $mqtt->connect();
+if (!$connected) {
+    die("Not connected\n");
+}
 
 $mqtt->ping();
 
@@ -22,6 +25,11 @@ $mqtt->subscribe($topics);
 $mqtt->loop('default_subscribe_callback');
 
 
-function default_subscribe_callback($topic, $message) {
+/**
+ * @param spMQTT $mqtt
+ * @param string $topic
+ * @param string $message
+ */
+function default_subscribe_callback($mqtt, $topic, $message) {
     printf("Message received: Topic=%s, Message=%s\n", $topic, $message);
 }

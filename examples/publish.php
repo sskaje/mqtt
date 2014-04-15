@@ -7,6 +7,9 @@ spMQTTDebug::Enable();
 
 //$mqtt->setAuth('sskaje', '123123');
 $connected = $mqtt->connect();
+if (!$connected) {
+    die("Not connected\n");
+}
 
 $mqtt->ping();
 
