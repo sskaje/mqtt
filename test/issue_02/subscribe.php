@@ -1,24 +1,29 @@
 <?php
 
-require(__DIR__ . '/../spMQTT.class.php');
+require(__DIR__ . '/../../spMQTT.class.php');
 
-$mqtt = new spMQTT('tcp://test.mosquitto.org:1883/');
+$clientid = substr(md5('QOS111_02'), 0, 20);
+
+$mqtt = new spMQTT('tcp://192.168.76.142:1883/', $clientid);
 
 spMQTTDebug::Enable();
+$mqtt->setConnectClean(false);
 
-//$mqtt->setAuth('sskaje', '123123');
+
 $mqtt->setKeepalive(3600);
 $connected = $mqtt->connect();
 if (!$connected) {
     die("Not connected\n");
 }
 
+# !!!
+//$mqtt->ping();
 
-$topics['sskaje/#'] = 1;
+
+$topics['sskaje/test/#'] = 1;
 
 $mqtt->subscribe($topics);
 
-#$mqtt->unsubscribe(array_keys($topics));
 
 $mqtt->loop('default_subscribe_callback');
 
