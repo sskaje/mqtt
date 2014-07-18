@@ -1,0 +1,16 @@
+{
+    "name": "sskaje/mqtt",
+    "description": "sskaje's MQTT Class",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "sskaje",
+            "email": "sskaje@gmail.com",
+            "homepage": "https://sskaje.me"
+        }
+    ],
+    "minimum-stability": "dev",
+    "require": {
+        "php": ">=5.3.0"
+    }
+}
