@@ -66,6 +66,8 @@ class spMQTT extends spMQTTBase{
         spMQTTUtil::CheckClientID($clientid);
 
         $this->clientid = $clientid;
+        
+        date_default_timezone_set('UTC');
     }
 
     /**
