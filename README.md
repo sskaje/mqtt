@@ -26,7 +26,7 @@ For SUBSCRIBE users, it's recommended to program a callback forwarding message t
 
 
 ##Examples
-@see files in /examples/
+@see files in /test
 
 
 ##\#EOF
