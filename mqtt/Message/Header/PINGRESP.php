@@ -70,7 +70,8 @@ class PINGRESP extends Base
      */
     protected function decodeVariableHeader(& $packet_data, & $pos)
     {
-        throw new Exception('NO PINGREQ will be sent to client');
+        # DO NOTHING
+        return $this->decodeVariableHeader($packet_data, $pos);
     }
 }
 
