@@ -409,7 +409,7 @@ class MQTT
          */
         $this->socket->close();
 
-        $this->call_handler('disconnect');
+        $this->call_handler('disconnect', array($this));
 
         return true;
     }
@@ -1232,13 +1232,16 @@ class MQTT
             return false;
         }
 
-        # read 4 bytes
-        $read_bytes = 4;
-        $read_message = $this->socket->read($read_bytes);
+        # read 2 bytes
+        $read_fh_bytes = 2;
+        $read_more_length_bytes = 3;
+
+        $read_bytes = 0;
+        $read_message = $this->socket->read($read_fh_bytes);
         if (empty($read_message)) {
-            # TODO: xxx
             throw new Exception('WTFFFFFF!!!! ');
         }
+        $read_bytes += $read_fh_bytes;
 
         $cmd = Utility::ParseCommand(ord($read_message[0]));
 
@@ -1247,27 +1250,20 @@ class MQTT
 
         Debug::Log(Debug::DEBUG, "message_read(): message_type=".Message::$name[$message_type].", flags={$flags}");
 
-        $flag_remaining_length_finished = 0;
-        for ($i=1; isset($read_message[$i]); $i++) {
-            if (ord($read_message[$i]) < 0x80) {
-                $flag_remaining_length_finished = 1;
-                break;
-            }
-        }
-
-        if (!$flag_remaining_length_finished) {
+        if (ord($read_message[1]) > 0x7f) {
             # read 3 more bytes
-            $read_message .= $this->socket->read(3);
+            $read_message .= $this->socket->read($read_more_length_bytes);
+            $read_bytes += $read_more_length_bytes;
         }
 
         $pos = 1;
-        $len = $pos;
         $remaining_length = Utility::DecodeLength($read_message, $pos);
-        if ($flag_remaining_length_finished) {
-            $to_read = $remaining_length - (3 + $len - $pos);
-        } else {
-            $to_read = $remaining_length - 2;
+
+        $to_read = 0;
+        if ($remaining_length) {
+            $to_read = $remaining_length - ($read_bytes - $pos);
         }
+
         Debug::Log(Debug::DEBUG, 'message_read(): remaining length=' . $remaining_length . ', data to read='.$to_read);
         if ($to_read) {
             $read_message .= $this->socket->read($to_read);

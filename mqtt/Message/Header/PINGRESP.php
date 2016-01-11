@@ -71,7 +71,7 @@ class PINGRESP extends Base
     protected function decodeVariableHeader(& $packet_data, & $pos)
     {
         # DO NOTHING
-        return $this->decodeVariableHeader($packet_data, $pos);
+        return true;
     }
 }
 
