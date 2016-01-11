@@ -773,14 +773,13 @@ class MQTT
         $selected = $this->socket->select($this->keepalive / 2);
 
         if ($selected === false) {
-
             # Error
-
+            throw new Exception\NetworkError('Connection lost???');
         } else if ($selected) {
             return $this->handle_incoming();
         } else {
-
             # no incoming packet
+            return 0;
         }
     }
 
@@ -802,6 +801,8 @@ class MQTT
             array_shift($this->ping_queue);
             Debug::Log(Debug::INFO, 'loop(): received PINGRESP');
 
+            $this->last_ping_time = time();
+
             break;
 
             # Process PUBLISH
@@ -814,11 +815,6 @@ class MQTT
             Debug::Log(Debug::INFO, 'loop(): received PUBLISH');
 
             $qos    = $message_object->getQoS();
-            $dup    = $message_object->getDup();
-            $retain = $message_object->getRetain();
-
-            # Message content
-            $message = $message_object->getMessage();
 
             $msgid = $message_object->getMsgID();
 
@@ -1100,6 +1096,13 @@ class MQTT
             }
         }
     }
+
+    /**
+     * Main Loop
+     *
+     * @return bool
+     * @throws \Exception
+     */
     public function loop()
     {
         Debug::Log(Debug::DEBUG, 'loop()');
@@ -1122,44 +1125,53 @@ class MQTT
                 $this->unsubscribe_awaits[$last_unsubscribe_msgid] = $last_unsubscribe_topics;
             }
 
-            # TODO: EOF ??? Keep Alive ???
-            if ($this->socket->eof() || !$this->keepalive()) {
-                Debug::Log(Debug::INFO, 'loop(): EOF detected');
+            try {
+                # It is the responsibility of the Client to ensure that the interval between Control Packets
+                # being sent does not exceed the Keep Alive value. In the absence of sending any other Control
+                # Packets, the Client MUST send a PINGREQ Packet [MQTT-3.1.2-23].
+                $this->keepalive();
+
+                $this->handle_message();
+
+            } catch (Exception\NetworkError $e) {
+                Debug::Log(Debug::INFO, 'loop(): Connection lost.');
                 $this->reconnect();
                 $this->subscribe($this->topics);
+            } catch (\Exception $e) {
+                throw $e;
             }
-
-            $this->keepalive();
-
-            $this->handle_message();
         }
 
         return true;
     }
 
+    protected $last_ping_time = 0;
+
     /**
      * Keep Alive
      *
+     * If the Keep Alive value is non-zero and the Server does not receive a Control Packet from the Client
+     * within one and a half times the Keep Alive time period, it MUST disconnect the Network Connection to
+     * the Client as if the network had failed [MQTT-3.1.2-24].
+     *
      * @return bool
      */
-    protected function keepalive()
+    public function keepalive()
     {
         Debug::Log(Debug::DEBUG, 'keepalive()');
 
-        static $time = null;
         $current_time = time();
 
-        if (empty($time)) {
+        if (empty($this->last_ping_time)) {
             if ($this->connected_time) {
-                $time = $this->connected_time;
+                $this->last_ping_time = $this->connected_time;
             } else {
-                $time = $current_time;
+                $this->last_ping_time = $current_time;
             }
         }
 
-        if ($current_time - $time >= $this->keepalive / 2) {
-            Debug::Log(Debug::DEBUG, "keepalive(): current_time={$current_time}, time={$time}, keepalive={$this->keepalive}");
-            $time = $current_time;
+        if ($current_time - $this->last_ping_time >= $this->keepalive / 2) {
+            Debug::Log(Debug::DEBUG, "keepalive(): current_time={$current_time}, last_ping_time={$this->last_ping_time}, keepalive={$this->keepalive}");
             $this->ping();
         }
 
