@@ -533,7 +533,7 @@ class MQTT
      * @param int        $dup      Optional, Default to 0
      * @return array|bool
      */
-    public function do_publish($topic, $message, $qos=0, $retain=0, & $msgid=0, $dup=0)
+    protected function do_publish($topic, $message, $qos=0, $retain=0, & $msgid=0, $dup=0)
     {
         /**
          * @var PacketIdentifier[] $pis
@@ -790,7 +790,6 @@ class MQTT
      */
     protected function handle_incoming()
     {
-
         $message_object = $this->message_read();
         if (!$message_object) {
             return false;
@@ -802,6 +801,8 @@ class MQTT
             Debug::Log(Debug::INFO, 'loop(): received PINGRESP');
 
             $this->last_ping_time = time();
+
+            $this->call_handler('pingresp', array($this, $message_object));
 
             break;
 
@@ -1184,11 +1185,16 @@ class MQTT
      * Send PINGREQ
      *
      * @return bool
+     * @throws Exception\NetworkError
      */
     public function ping()
     {
         Debug::Log(Debug::INFO, 'ping()');
-        $this->simpleCommand(Message::PINGREQ);
+        # parse error?
+        $ret = $this->simpleCommand(Message::PINGREQ);
+        if (!$ret) {
+            throw new Exception\NetworkError();
+        }
 
         $this->ping_queue[] = time();
 
@@ -1232,6 +1238,20 @@ class MQTT
     }
 
     /**
+     * EOF counter
+     *
+     * @var int
+     */
+    protected $count_eof = 0;
+
+    /*
+     * Maximum EOF
+     *
+     * @var int
+     */
+    protected $max_eof = 10;
+
+    /**
      * Read Message And Create Message Object
      *
      * @return \sskaje\mqtt\Message\Base
@@ -1240,9 +1260,20 @@ class MQTT
     protected function message_read()
     {
         if ($this->socket->eof()) {
-            Debug::Log(Debug::NOTICE, 'message_read(): EOF');
+            if (++ $this->count_eof > 5) {
+                usleep(pow(2, $this->count_eof));
+            }
+
+            Debug::Log(Debug::NOTICE, 'message_read(): EOF ' . $this->count_eof);
+
+            if ($this->count_eof > $this->max_eof) {
+                throw new Exception\NetworkError();
+            }
+
             return false;
         }
+        # Reset EOF counter
+        $this->count_eof = 0;
 
         # read 2 bytes
         $read_fh_bytes = 2;

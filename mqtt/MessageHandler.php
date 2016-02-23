@@ -86,6 +86,11 @@ class MessageHandler
 
     }
 
+    public function pingresp(MQTT $mqtt, Message\PINGRESP $pingresp_object)
+    {
+
+    }
+
 }
 
 # EOF
