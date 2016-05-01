@@ -1,5 +1,5 @@
 <?php
-require(__DIR__ . '/../../autoload.example.php');
+require(__DIR__ . '/../test.inc.php');
 
 use \sskaje\mqtt\Utility;
 
