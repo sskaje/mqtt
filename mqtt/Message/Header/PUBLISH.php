@@ -118,7 +118,7 @@ class PUBLISH extends Base
      *
      * @return int
      */
-    public function getQos()
+    public function getQoS()
     {
         return $this->qos;
     }
@@ -194,12 +194,12 @@ class PUBLISH extends Base
         $header .= Utility::PackStringWithLength($topic);
         Debug::Log(Debug::DEBUG, 'Message PUBLISH: topic='.$topic);
 
-        Debug::Log(Debug::DEBUG, 'Message PUBLISH: QoS='.$this->getQos());
+        Debug::Log(Debug::DEBUG, 'Message PUBLISH: QoS='.$this->getQoS());
         Debug::Log(Debug::DEBUG, 'Message PUBLISH: DUP='.$this->getDup());
         Debug::Log(Debug::DEBUG, 'Message PUBLISH: RETAIN='.$this->getRetain());
 
         # Message ID if QoS > 0
-        if ($this->getQos()) {
+        if ($this->getQoS()) {
             if (!$this->msgid) {
                 throw new Exception('MsgID MUST be set if QoS is not 0.');
             }
@@ -223,7 +223,7 @@ class PUBLISH extends Base
         $topic = Utility::UnpackStringWithLength($packet_data, $pos);
         $this->message->setTopic($topic);
 
-        if ($this->getQos() > 0) {
+        if ($this->getQoS() > 0) {
             # Decode Packet Identifier if QoS > 0
             $this->decodePacketIdentifier($packet_data, $pos);
         }
@@ -241,7 +241,7 @@ class PUBLISH extends Base
     {
         $flags = 0;
 
-        if (!$this->getQos()) {
+        if (!$this->getQoS()) {
             if ($this->getDup()) {
                 /*
                  In the QoS 0 delivery protocol, the Sender MUST send a PUBLISH packet with QoS=0, DUP=0 [MQTT-4.3.1-1].

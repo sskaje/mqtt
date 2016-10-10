@@ -1,5 +1,4 @@
 <?php
-
 /**
  * MQTT Client
  *
@@ -37,56 +36,35 @@
  */
 
 namespace sskaje\mqtt;
-use sskaje\mqtt\PacketIdentifierStore\PhpStatic;
+
 
 /**
- * Packet Identifier Generator
+ * Interface ifPacketIdentifierStore
  *
  * @package sskaje\mqtt
  */
-class PacketIdentifier
+interface PacketIdentifierStoreInterface
 {
     /**
-     * @var PhpStatic
+     * Get Current Packet Identifier
+     *
+     * @return int
      */
-    protected $pi;
-
-    public function __construct()
-    {
-        $this->pi = new PhpStatic();
-    }
+    public function get();
 
     /**
      * Next Packet Identifier
      *
      * @return int
      */
-    public function next()
-    {
-        return $this->pi->next() % 65535 + 1;
-    }
-
-    /**
-     * Current Packet Identifier
-     *
-     * @return mixed
-     */
-    public function get()
-    {
-        return $this->pi->get() % 65535 + 1;
-    }
+    public function next();
 
     /**
      * Set A New ID
      *
-     * @param int $new_id
+     * @param $new_id
      * @return void
      */
-    public function set($new_id)
-    {
-        $this->pi->set($new_id);
-    }
+    public function set($new_id);
+
 }
-
-
-# EOF

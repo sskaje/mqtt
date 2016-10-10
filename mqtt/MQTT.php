@@ -312,7 +312,7 @@ class MQTT
     /**
      * Connect to broker
      s*
-     * @return bool
+     * @return Message\CONNACK
      * @throws Exception
      */
     public function connect()
@@ -418,7 +418,7 @@ class MQTT
      * Reconnect connection
      *
      * @param bool $close_current close current existed connection
-     * @return bool
+     * @return Message\CONNACK
      */
     public function reconnect($close_current=true)
     {
@@ -714,7 +714,7 @@ class MQTT
     /**
      * DO Unsubscribe topics
      *
-     * @return int
+     * @return array(int, array)
      * @throws Exception
      */
     protected function do_unsubscribe()
@@ -1254,7 +1254,7 @@ class MQTT
     /**
      * Read Message And Create Message Object
      *
-     * @return \sskaje\mqtt\Message\Base
+     * @return \sskaje\mqtt\Message\Base|false
      * @throws \sskaje\mqtt\Exception
      */
     protected function message_read()

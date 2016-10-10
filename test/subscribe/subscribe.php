@@ -13,7 +13,7 @@ $mqtt->setSocketContext($context);
 Debug::Enable();
 
 //$mqtt->setAuth('sskaje', '123123');
-$mqtt->setKeepalive(3600);
+$mqtt->setKeepalive(10);
 $connected = $mqtt->connect();
 if (!$connected) {
     die("Not connected\n");
@@ -35,7 +35,7 @@ class MySubscribeCallback extends MessageHandler
         printf(
             "\e[32mI got a message\e[0m:(msgid=%d, QoS=%d, dup=%d, topic=%s) \e[32m%s\e[0m\n",
             $publish_object->getMsgID(),
-            $publish_object->getQos(),
+            $publish_object->getQoS(),
             $publish_object->getDup(),
             $publish_object->getTopic(),
             $publish_object->getMessage()

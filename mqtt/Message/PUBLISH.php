@@ -134,9 +134,9 @@ class PUBLISH extends Base
      *
      * @return int
      */
-    public function getQos()
+    public function getQoS()
     {
-        return $this->header->getQos();
+        return $this->header->getQoS();
     }
 
     /**
