@@ -124,7 +124,7 @@ class Base
 
         $rl_len = strlen(($this->remaining_length_bytes = Utility::EncodeLength($remaining_length)));
 
-        if (strpos($packet_data, $this->remaining_length_bytes) !== $pos) {
+        if (strpos($packet_data, $this->remaining_length_bytes, 1) !== $pos) {
             throw new Exception('Remaining Length mismatch.');
         }
         $pos += $rl_len;
