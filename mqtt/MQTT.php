@@ -311,7 +311,7 @@ class MQTT
 
     /**
      * Connect to broker
-     s*
+     *
      * @return Message\CONNACK
      * @throws Exception
      */
