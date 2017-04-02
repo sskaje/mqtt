@@ -269,6 +269,9 @@ class spMQTT extends spMQTTBase{
         $publishobj->setMsgID($msgid);
 
         $publish_bytes_written = $publishobj->write();
+         if (! $publish_bytes_written) {
+            return false;
+        }
         spMQTTDebug::Log('publish(): bytes written=' . $publish_bytes_written);
 
         if ($qos == 0) {
