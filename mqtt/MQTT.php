@@ -433,16 +433,6 @@ class MQTT
     }
 
     /**
-     * todo: publish() in sskaje/MQTT 1.0
-     *
-     */
-    public function publish_legacy()
-    {
-        $this->socket->set_blocking();
-
-    }
-
-    /**
      * Publish Message to topic synchronized
      *
      * @param string   $topic
