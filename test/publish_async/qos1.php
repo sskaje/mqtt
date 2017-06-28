@@ -6,7 +6,6 @@ ini_set('error_log', __DIR__ . '/../../logs/examples_publish.log');
 
 use \sskaje\mqtt\MQTT;
 use \sskaje\mqtt\Debug;
-use \sskaje\mqtt\MessageHandler;
 
 $mqtt = new MQTT($MQTT_SERVER);
 
@@ -50,7 +49,7 @@ do {
 } while (++$c < 100);
 
 $mqtt->setHandler($myhandler);
-# TODO: EXIT?
+
 $mqtt->loop();
 
 # EOF

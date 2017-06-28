@@ -1,6 +1,8 @@
 <?php
 require(__DIR__ . '/../test.inc.php');
 
+use sskaje\mqtt\Message\PUBLISH;
+use sskaje\mqtt\Message\SUBACK;
 use \sskaje\mqtt\MQTT;
 use \sskaje\mqtt\Debug;
 use \sskaje\mqtt\MessageHandler;
@@ -10,7 +12,7 @@ $mqtt = new MQTT($MQTT_SERVER);
 $context = stream_context_create();
 $mqtt->setSocketContext($context);
 
-# Debug::Enable();
+Debug::Disable();
 
 $mqtt->setVersion(MQTT::VERSION_3_1_1);
 
@@ -40,7 +42,7 @@ class BotControlCallback extends MessageHandler
 {
     protected $online_agents = array();
 
-    public function publish($mqtt, \sskaje\mqtt\Message\PUBLISH $publish_object)
+    public function publish(MQTT $mqtt, PUBLISH $publish_object)
     {
         $topic = $publish_object->getTopic();
         $message = $publish_object->getMessage();
@@ -68,7 +70,7 @@ class BotControlCallback extends MessageHandler
         }
     }
 
-    public function suback($mqtt, \sskaje\mqtt\Message\SUBACK $suback_object)
+    public function suback(MQTT $mqtt, SUBACK $suback_object)
     {
         $mqtt->publish_async('sskaje/bot/broadcast', "I'm alive", 1);
     }

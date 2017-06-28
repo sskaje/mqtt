@@ -5,6 +5,8 @@ use \sskaje\mqtt\MQTT;
 use \sskaje\mqtt\Debug;
 use \sskaje\mqtt\MessageHandler;
 
+Debug::Disable();
+
 $client_id = isset($argv[1]) ? $argv[1] : time();
 
 $mqtt = new MQTT($MQTT_SERVER, $client_id);

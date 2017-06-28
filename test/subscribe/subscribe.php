@@ -30,7 +30,7 @@ $mqtt->subscribe($topics);
 class MySubscribeCallback extends MessageHandler
 {
 
-    public function publish($mqtt, sskaje\mqtt\Message\PUBLISH $publish_object)
+    public function publish(MQTT $mqtt, sskaje\mqtt\Message\PUBLISH $publish_object)
     {
         printf(
             "\e[32mI got a message\e[0m:(msgid=%d, QoS=%d, dup=%d, topic=%s) \e[32m%s\e[0m\n",
