@@ -959,6 +959,7 @@ class MQTT
                             );
                         }
                     }
+                    unset($this->subscribe_awaits[$msgid]);
                 }
             }
 
@@ -1100,7 +1101,7 @@ class MQTT
 
         while (true) {
             # check if any commands awaits or topics to subscribe
-            if (!$this->cmdstore->countWaits() && empty($this->topics) && empty($this->topics_to_subscribe)) {
+            if (!$this->cmdstore->countWaits() && empty($this->topics) && empty($this->topics_to_subscribe) && empty($this->subscribe_awaits)) {
                 Debug::Log(Debug::INFO, "loop(): No tasks, leaving...");
                 break;
             }
