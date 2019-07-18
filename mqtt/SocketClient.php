@@ -110,7 +110,7 @@ class SocketClient
         }
         Debug::Log(Debug::DEBUG, 'socket_connect(): connect to='.$this->address);
 
-        $this->socket = stream_socket_client(
+        $this->socket = @stream_socket_client(
             $this->address,
             $errno,
             $errstr,
