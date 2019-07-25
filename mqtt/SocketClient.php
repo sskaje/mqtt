@@ -162,8 +162,13 @@ class SocketClient
     public function write($packet, $packet_size)
     {
         if (!$this->socket || !is_resource($this->socket)) return false;
+        
         Debug::Log(Debug::DEBUG, "socket_write(length={$packet_size})", $packet);
-        return fwrite($this->socket, $packet, $packet_size);
+        
+        do { $packet = substr($packet, fwrite($this->socket, $packet)); } while (!empty($packet));
+     
+        If (!empty($packet)) {return false;} else {return $packet_size;}   
+        
     }
 
     /**
