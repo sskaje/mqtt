@@ -555,7 +555,14 @@ class MQTT
 
         $publishobj->setMsgID($msgid);
 
-        $publish_bytes_written = $this->message_write($publishobj);
+//        $publish_bytes_written = $this->message_write($publishobj);
+
+        $publish_bytes_written = $this->message_write($publishobj, $msg_len);
+        if( $publish_bytes_written != $msg_len )
+        {
+            $this->reconnect();
+        }
+
         Debug::Log(Debug::DEBUG, 'do_publish(): bytes written=' . $publish_bytes_written);
 
         if ($qos == 1) {
