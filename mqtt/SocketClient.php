@@ -220,12 +220,12 @@ class SocketClient
      * @param int $timeout
      * @return int
      */
-    public function select($timeout)
+    public function select($timeout, $tv_usec = 0)
     {
         $read = array($this->socket);
         $write = $except = NULL;
 
-        return stream_select($read, $write, $except, $timeout);
+        return stream_select($read, $write, $except, $timeout, $tv_usec);
     }
 }
 
