@@ -38,6 +38,7 @@
 
 
 namespace sskaje\mqtt;
+use sskaje\mqtt\Exception\FwriteError;
 
 /**
  * Socket Client
@@ -163,7 +164,15 @@ class SocketClient
     {
         if (!$this->socket || !is_resource($this->socket)) return false;
         Debug::Log(Debug::DEBUG, "socket_write(length={$packet_size})", $packet);
-        return fwrite($this->socket, $packet, $packet_size);
+        $write_len = fwrite($this->socket, $packet, $packet_size);
+
+        $err_arr = error_get_last();
+        if(empty($err_arr))
+        {
+            return $write_len;
+        }
+
+        throw new FwriteError(json_encode($err_arr));
     }
 
     /**
